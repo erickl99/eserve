@@ -1,20 +1,34 @@
-#include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define WEB_SERVER 0
 #define ECHO_SERVER 1
 
-const char *http_message = "HTTP/1.1 200 OK\r\n"
-                           "Server: Eserve\r\n"
-                           "Connection: close\r\n"
-                           "Content-type: text/plain\r\n"
-                           "Content-length: 14\r\n"
-                           "\r\n"
-                           "Hello world!\r\n";
+const char *headers = "HTTP/1.1 200 OK\r\n"
+                      "Server: eserve\r\n"
+                      "Connection: close\r\n";
+
+const char *default_response = "Content-type: text/plain\r\n"
+                               "Content-length: 14\r\n"
+                               "\r\n"
+                               "Hello world!\r\n";
+
+const char *error_response = "HTTP/1.1 501 Not Implemented\r\n"
+                             "Server: eserve\r\n"
+                             "Connection: close\r\n"
+                             "Content-type: text/html\r\n"
+                             "Content-length: 151\r\n\r\n"
+                             "<html>\r\n"
+                             "<body>\r\n"
+                             "<head><title>405 Not Allowed</title></head>\r\n"
+                             "<center><h1>405 Not Allowed</h1></center>\r\n"
+                             "<hr><center>eserve</center>\r\n"
+                             "</body>\r\n"
+                             "</html>\r\n";
 
 int create_socket() {
   struct addrinfo *info;
@@ -37,7 +51,6 @@ int create_socket() {
   setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof optval);
 
   if (bind(sfd, info->ai_addr, info->ai_addrlen) == -1) {
-    fprintf(stderr, "Failed at bind: %s\n", strerror(errno));
     freeaddrinfo(info);
     close(sfd);
     return -1;
@@ -53,17 +66,34 @@ int create_socket() {
 }
 
 void web_server(int cfd) {
-  char response[1024];
-  int bytes_received = recv(cfd, response, 1024, 0);
+  char buffer[1024];
+  int bytes_received = recv(cfd, buffer, 1024, 0);
   if (bytes_received < 1) {
     printf("Connection closed by client (or an error occurred)\n");
     close(cfd);
     return;
   }
-  printf("Received http message: %.*s\n", bytes_received, response);
-  int message_len = strlen(http_message);
-  int bytes_sent = send(cfd, http_message, message_len, 0);
-  printf("Sent %d of %d bytes of header\n", bytes_sent, message_len);
+  printf("Received http message:\n%.*s\n", bytes_received, buffer);
+  int headers_len = strlen(headers);
+  int bytes_sent = send(cfd, headers, headers_len, 0);
+  printf("Sent %d of %d bytes of headers\n", bytes_sent, headers_len);
+  FILE *fp = fopen("index.html", "rb");
+  if (fp == NULL) {
+    int response_len = strlen(default_response);
+    bytes_sent = send(cfd, default_response, response_len, 0);
+    printf("Sent %d of %d bytes of default\n", bytes_sent, headers_len);
+  } else {
+    struct stat fp_stat;
+    fstat(fileno(fp), &fp_stat);
+    int file_size = fp_stat.st_size;
+    int total_bytes =
+        sprintf(buffer, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
+                file_size);
+    send(cfd, buffer, total_bytes, 0);
+    fread(buffer, 1, file_size, fp);
+    send(cfd, buffer, file_size, 0);
+    printf("Sent message\n");
+  }
   close(cfd);
 }
 
