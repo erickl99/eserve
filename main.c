@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -77,21 +78,20 @@ void web_server(int cfd) {
   int headers_len = strlen(headers);
   int bytes_sent = send(cfd, headers, headers_len, 0);
   printf("Sent %d of %d bytes of headers\n", bytes_sent, headers_len);
-  FILE *fp = fopen("index.html", "rb");
-  if (fp == NULL) {
+  FILE *index_file = fopen("index.html", "rb");
+  if (index_file == NULL) {
     int response_len = strlen(default_response);
     bytes_sent = send(cfd, default_response, response_len, 0);
     printf("Sent %d of %d bytes of default\n", bytes_sent, headers_len);
   } else {
     struct stat fp_stat;
-    fstat(fileno(fp), &fp_stat);
+    int file_fd = fileno(index_file);
+    fstat(file_fd, &fp_stat);
     int file_size = fp_stat.st_size;
     int total_bytes =
         sprintf(buffer, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
                 file_size);
-    send(cfd, buffer, total_bytes, 0);
-    fread(buffer, 1, file_size, fp);
-    send(cfd, buffer, file_size, 0);
+    sendfile(cfd, file_fd, 0, file_size);
     printf("Sent message\n");
   }
   close(cfd);
