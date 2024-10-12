@@ -1,8 +1,8 @@
 #include <netdb.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/sendfile.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -18,18 +18,45 @@ const char *default_response = "Content-type: text/plain\r\n"
                                "\r\n"
                                "Hello world!\r\n";
 
-const char *error_response = "HTTP/1.1 501 Not Implemented\r\n"
-                             "Server: eserve\r\n"
-                             "Connection: close\r\n"
-                             "Content-type: text/html\r\n"
-                             "Content-length: 151\r\n\r\n"
-                             "<html>\r\n"
-                             "<body>\r\n"
-                             "<head><title>405 Not Allowed</title></head>\r\n"
-                             "<center><h1>405 Not Allowed</h1></center>\r\n"
-                             "<hr><center>eserve</center>\r\n"
-                             "</body>\r\n"
-                             "</html>\r\n";
+const char *response413 =
+    "HTTP/1.1 413 Content Too Large\r\n"
+    "Server: eserve\r\n"
+    "Connection: close\r\n"
+    "Content-type: text/html\r\n"
+    "Content-length: 202\r\n\r\n"
+    "<html>\r\n"
+    "<body>\r\n"
+    "<head><title>413 Content Too Large</title></head>\r\n"
+    "<center><h1>413 Content Too Large</h1></center>\r\n"
+    "<hr><center>Server eserve accepts at most 4KB of headers.</center>\r\n"
+    "</body>\r\n"
+    "</html>\r\n";
+
+const char *response501 = "HTTP/1.1 501 Not Implemented\r\n"
+                          "Server: eserve\r\n"
+                          "Connection: close\r\n"
+                          "Content-type: text/html\r\n"
+                          "Content-length: 159\r\n\r\n"
+                          "<html>\r\n"
+                          "<body>\r\n"
+                          "<head><title>501 Not Implemented</title></head>\r\n"
+                          "<center><h1>501 Not Implemented</h1></center>\r\n"
+                          "<hr><center>eserve</center>\r\n"
+                          "</body>\r\n"
+                          "</html>\r\n";
+
+const char *response404 = "HTTP/1.1 404 Not Found\r\n"
+                          "Server: eserve\r\n"
+                          "Connection: close\r\n"
+                          "Content-type: text/html\r\n"
+                          "Content-length: 147\r\n\r\n"
+                          "<html>\r\n"
+                          "<body>\r\n"
+                          "<head><title>404 Not Found</title></head>\r\n"
+                          "<center><h1>404 Not Found</h1></center>\r\n"
+                          "<hr><center>eserve</center>\r\n"
+                          "</body>\r\n"
+                          "</html>\r\n";
 
 int create_socket() {
   struct addrinfo *info;
@@ -66,23 +93,32 @@ int create_socket() {
   return sfd;
 }
 
+void parse_headers() {}
+
 void web_server(int cfd) {
-  char buffer[1024];
-  int bytes_received = recv(cfd, buffer, 1024, 0);
+  char buffer[4096];
+  int bytes_received = recv(cfd, buffer, 4096, 0);
   if (bytes_received < 1) {
     printf("Connection closed by client (or an error occurred)\n");
     close(cfd);
     return;
   }
-  printf("Received http message:\n%.*s\n", bytes_received, buffer);
+  if (bytes_received == 4096 && strncmp(buffer, "\r\n\r\n", 4)) {
+    int response_len = strlen(response413);
+    int bytes_sent = send(cfd, response413, response_len, 0);
+    printf("Sent %d of %d bytes of error\n", bytes_sent, response_len);
+    close(cfd);
+    return;
+  }
+  printf("Received http message with %d bytes:\n%.*s\n", bytes_received, bytes_received, buffer);
   int headers_len = strlen(headers);
   int bytes_sent = send(cfd, headers, headers_len, 0);
   printf("Sent %d of %d bytes of headers\n", bytes_sent, headers_len);
-  FILE *index_file = fopen("index.html", "rb");
+  FILE *index_file = fopen("faker.html", "rb");
   if (index_file == NULL) {
-    int response_len = strlen(default_response);
-    bytes_sent = send(cfd, default_response, response_len, 0);
-    printf("Sent %d of %d bytes of default\n", bytes_sent, headers_len);
+    int response_len = strlen(response404);
+    bytes_sent = send(cfd, response404, response_len, 0);
+    printf("Sent %d of %d bytes of error\n", bytes_sent, response_len);
   } else {
     struct stat fp_stat;
     int file_fd = fileno(index_file);
@@ -92,6 +128,7 @@ void web_server(int cfd) {
         sprintf(buffer, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
                 file_size);
     sendfile(cfd, file_fd, 0, file_size);
+    fclose(index_file);
     printf("Sent message\n");
   }
   close(cfd);
