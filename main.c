@@ -6,9 +6,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define WEB_SERVER 0
-#define ECHO_SERVER 1
-
 const char *headers = "HTTP/1.1 200 OK\r\n"
                       "Server: eserve\r\n"
                       "Connection: close\r\n";
@@ -95,26 +92,32 @@ int create_socket() {
 
 void parse_headers() {}
 
-void web_server(int cfd) {
+int web_server(int cfd) {
   char buffer[4096];
   int bytes_received = recv(cfd, buffer, 4096, 0);
   if (bytes_received < 1) {
     printf("Connection closed by client (or an error occurred)\n");
     close(cfd);
-    return;
+    return 1;
+  }
+  if (bytes_received >= 4 && strncmp(buffer, "quit", 4) == 0) {
+    printf("Received shut down signal, shutting down server...\n");
+    close(cfd);
+    return 1;
   }
   if (bytes_received == 4096 && strncmp(buffer, "\r\n\r\n", 4)) {
     int response_len = strlen(response413);
     int bytes_sent = send(cfd, response413, response_len, 0);
     printf("Sent %d of %d bytes of error\n", bytes_sent, response_len);
     close(cfd);
-    return;
+    return 0;
   }
-  printf("Received http message with %d bytes:\n%.*s\n", bytes_received, bytes_received, buffer);
+  printf("Received http message with %d bytes:\n%.*s\n", bytes_received,
+         bytes_received, buffer);
   int headers_len = strlen(headers);
   int bytes_sent = send(cfd, headers, headers_len, 0);
   printf("Sent %d of %d bytes of headers\n", bytes_sent, headers_len);
-  FILE *index_file = fopen("faker.html", "rb");
+  FILE *index_file = fopen("index.html", "rb");
   if (index_file == NULL) {
     int response_len = strlen(response404);
     bytes_sent = send(cfd, response404, response_len, 0);
@@ -127,73 +130,38 @@ void web_server(int cfd) {
     int total_bytes =
         sprintf(buffer, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
                 file_size);
+    send(cfd, buffer, total_bytes, 0);
     sendfile(cfd, file_fd, 0, file_size);
     fclose(index_file);
     printf("Sent message\n");
   }
   close(cfd);
-}
-
-void echo_server(int cfd) {
-  char message[1024];
-  char *greeting =
-      "Welcome to the echo server! Type \"quit\" to close the connection\n";
-  send(cfd, greeting, strlen(greeting), 0);
-
-  for (;;) {
-    int bytes_received = recv(cfd, message, 1024, 0);
-    if (bytes_received < 1) {
-      printf("Connection closed by client (or an error occurred)\n");
-      close(cfd);
-      break;
-    }
-    printf("Received %d byte message: %.*s\n", bytes_received, bytes_received,
-           message);
-    if (bytes_received >= 4 && strncmp(message, "quit", 4) == 0) {
-      close(cfd);
-      break;
-    }
-    int bytes_sent = send(cfd, message, bytes_received, 0);
-    printf("Sent %d bytes of %d bytes\n", bytes_sent, bytes_received);
-  }
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
-  int server_mode = WEB_SERVER;
-  if (argc > 1) {
-    if (strcmp(argv[1], "echo") == 0) {
-      server_mode = ECHO_SERVER;
-    } else if (strcmp(argv[1], "web") != 0) {
-      fprintf(stderr, "Usage: server [mode]\n");
-      return 1;
-    }
-  }
   int sfd = create_socket();
   if (sfd == -1) {
     return 1;
   }
   printf("Listening on localhost:8000...\n");
-
-  struct sockaddr_storage client_info;
-  socklen_t len = sizeof(client_info);
-  int cfd = accept(sfd, (struct sockaddr *)&client_info, &len);
-  if (cfd == -1) {
-    fprintf(stderr, "Failed to connect to client...\n");
-    close(sfd);
-    return 1;
-  }
-
-  char buffer[32];
-  getnameinfo((struct sockaddr *)&client_info, len, buffer, 32, 0, 0,
-              NI_NUMERICHOST);
-  printf("Connected to %s\n", buffer);
-
-  if (server_mode == WEB_SERVER) {
-    web_server(cfd);
-  } else {
-    echo_server(cfd);
+  char client_host_buffer[32];
+  int stop_server = 0;
+  while (!stop_server) {
+    struct sockaddr_storage client_info;
+    socklen_t len = sizeof(client_info);
+    int cfd = accept(sfd, (struct sockaddr *)&client_info, &len);
+    if (cfd == -1) {
+      fprintf(stderr, "Failed to connect to client...\n");
+      close(sfd);
+      return 1;
+    }
+    getnameinfo((struct sockaddr *)&client_info, len, client_host_buffer, 32, 0,
+                0, NI_NUMERICHOST);
+    printf("Connected to %s\n", client_host_buffer);
+    stop_server = web_server(cfd);
   }
   int success = close(sfd);
-  printf("Looks good to me: %d\n", success);
+  printf("Closed server: %d\n", success);
   return 0;
 }
