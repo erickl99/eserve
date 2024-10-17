@@ -90,7 +90,84 @@ int create_socket() {
   return sfd;
 }
 
-void parse_headers() {}
+typedef enum {
+  GET,
+  HEAD,
+  OPTIONS,
+  TRACE,
+  PUT,
+  DELETE,
+  POST,
+  PATCH,
+  CONNECT
+} method;
+
+typedef struct {
+  char *target;
+  method mthd;
+  uint8_t size;
+  char **headers;
+} request;
+
+int parse_headers(char *bytes, int size, request *req) {
+  if (size < 7) {
+    return -1;
+  }
+  int bytes_idx = 0;
+  if (strncmp(bytes, "GET", 3) == 0) {
+    req->mthd = GET;
+    bytes_idx += 3;
+  } else if (strncmp(bytes, "HEAD", 4) == 0) {
+    req->mthd = HEAD;
+    bytes_idx += 4;
+  } else if (strncmp(bytes, "OPTIONS", 7) == 0) {
+    req->mthd = OPTIONS;
+    bytes_idx += 7;
+  } else if (strncmp(bytes, "TRACE", 5) == 0) {
+    req->mthd = TRACE;
+    bytes_idx += 5;
+  } else if (strncmp(bytes, "PUT", 3) == 0) {
+    req->mthd = PUT;
+    bytes_idx += 3;
+  } else if (strncmp(bytes, "DELETE", 6) == 0) {
+    req->mthd = DELETE;
+    bytes_idx += 6;
+  } else if (strncmp(bytes, "POST", 4) == 0) {
+    req->mthd = POST;
+    bytes_idx += 4;
+  } else if (strncmp(bytes, "PATCH", 5) == 0) {
+    req->mthd = PATCH;
+    bytes_idx += 5;
+  } else if (strncmp(bytes, "CONNECT", 7) == 0) {
+    req->mthd = CONNECT;
+    bytes_idx += 7;
+  } else {
+    return -1;
+  }
+  bytes_idx++;
+  int target_start = bytes_idx;
+  if (bytes_idx >= size || bytes[bytes_idx] != '/') {
+    return -1;
+  }
+  while (bytes_idx < size && bytes[bytes_idx] != ' ') {
+    bytes_idx++;
+  }
+  if (bytes_idx == size) {
+    return -1;
+  }
+  bytes[bytes_idx] = '\0';
+  req->target = bytes + target_start;
+  bytes_idx++;
+  if (bytes_idx + 10 >= size ||
+      strncmp(bytes + bytes_idx, "HTTP/1.1\r\n", 10)) {
+    return -1;
+  }
+  bytes_idx += 10;
+  while (bytes_idx < size) {
+    bytes_idx++;
+  }
+  return 0;
+}
 
 int web_server(int cfd) {
   char buffer[4096];
@@ -105,15 +182,20 @@ int web_server(int cfd) {
     close(cfd);
     return 1;
   }
-  if (bytes_received == 4096 && strncmp(buffer, "\r\n\r\n", 4)) {
+  if (bytes_received == 4096 && strncmp(buffer + 4092, "\r\n\r\n", 4)) {
     int response_len = strlen(response413);
     int bytes_sent = send(cfd, response413, response_len, 0);
     printf("Sent %d of %d bytes of error\n", bytes_sent, response_len);
     close(cfd);
     return 0;
   }
-  printf("Received http message with %d bytes:\n%.*s\n", bytes_received,
-         bytes_received, buffer);
+  request req;
+  int result = parse_headers(buffer, bytes_received, &req);
+  if (result == -1) {
+    printf("An error occurred parsing headers...\n");
+  } else {
+    printf("Method: %d\nTarget: %s\n", req.mthd, req.target);
+  }
   int headers_len = strlen(headers);
   int bytes_sent = send(cfd, headers, headers_len, 0);
   printf("Sent %d of %d bytes of headers\n", bytes_sent, headers_len);
@@ -130,8 +212,8 @@ int web_server(int cfd) {
     int total_bytes =
         sprintf(buffer, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
                 file_size);
-    send(cfd, buffer, total_bytes, 0);
-    sendfile(cfd, file_fd, 0, file_size);
+    int result = send(cfd, buffer, total_bytes, 0);
+    result = sendfile(cfd, file_fd, 0, file_size);
     fclose(index_file);
     printf("Sent message\n");
   }
