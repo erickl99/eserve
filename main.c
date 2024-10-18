@@ -1,3 +1,4 @@
+#include "parser.h"
 #include <netdb.h>
 #include <stdio.h>
 #include <string.h>
@@ -6,16 +7,42 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-const char *headers = "HTTP/1.1 200 OK\r\n"
-                      "Server: eserve\r\n"
-                      "Connection: close\r\n";
+const char *constant_headers = "HTTP/1.1 200 OK\r\n"
+                               "Server: eserve\r\n"
+                               "Connection: close\r\n"
+                               "Content-type: text/html";
 
-const char *default_response = "Content-type: text/plain\r\n"
-                               "Content-length: 14\r\n"
-                               "\r\n"
-                               "Hello world!\r\n";
+const char *bad_request_response =
+    "HTTP/1.1 400 Bad Request\r\n"
+    "Server: eserve\r\n"
+    "Connection: close\r\n"
+    "Content-type: text/html\r\n"
+    "Content-length: 151\r\n\r\n"
+    "<html>\r\n"
+    "<body>\r\n"
+    "<head><title>400 Bad Request</title></head>\r\n"
+    "<center><h1>400 Bad Request</h1></center>\r\n"
+    "<hr><center>eserve</center>\r\n"
+    "</body>\r\n"
+    "</html>\r\n";
 
-const char *response413 =
+// clang-format off
+const char *not_found_response =
+    "HTTP/1.1 404 Not Found\r\n"
+    "Server: eserve\r\n"
+    "Connection: close\r\n"
+    "Content-type: text/html\r\n"
+    "Content-length: 147\r\n\r\n"
+    "<html>\r\n"
+    "<body>\r\n"
+    "<head><title>404 Not Found</title></head>\r\n"
+    "<center><h1>404 Not Found</h1></center>\r\n"
+    "<hr><center>eserve</center>\r\n"
+    "</body>\r\n"
+    "</html>\r\n";
+// clang-format on
+
+const char *too_large_response =
     "HTTP/1.1 413 Content Too Large\r\n"
     "Server: eserve\r\n"
     "Connection: close\r\n"
@@ -29,31 +56,19 @@ const char *response413 =
     "</body>\r\n"
     "</html>\r\n";
 
-const char *response501 = "HTTP/1.1 501 Not Implemented\r\n"
-                          "Server: eserve\r\n"
-                          "Connection: close\r\n"
-                          "Content-type: text/html\r\n"
-                          "Content-length: 159\r\n\r\n"
-                          "<html>\r\n"
-                          "<body>\r\n"
-                          "<head><title>501 Not Implemented</title></head>\r\n"
-                          "<center><h1>501 Not Implemented</h1></center>\r\n"
-                          "<hr><center>eserve</center>\r\n"
-                          "</body>\r\n"
-                          "</html>\r\n";
-
-const char *response404 = "HTTP/1.1 404 Not Found\r\n"
-                          "Server: eserve\r\n"
-                          "Connection: close\r\n"
-                          "Content-type: text/html\r\n"
-                          "Content-length: 147\r\n\r\n"
-                          "<html>\r\n"
-                          "<body>\r\n"
-                          "<head><title>404 Not Found</title></head>\r\n"
-                          "<center><h1>404 Not Found</h1></center>\r\n"
-                          "<hr><center>eserve</center>\r\n"
-                          "</body>\r\n"
-                          "</html>\r\n";
+const char *not_support_response =
+    "HTTP/1.1 501 Not Implemented\r\n"
+    "Server: eserve\r\n"
+    "Connection: close\r\n"
+    "Content-type: text/html\r\n"
+    "Content-length: 159\r\n\r\n"
+    "<html>\r\n"
+    "<body>\r\n"
+    "<head><title>501 Not Implemented</title></head>\r\n"
+    "<center><h1>501 Not Implemented</h1></center>\r\n"
+    "<hr><center>eserve</center>\r\n"
+    "</body>\r\n"
+    "</html>\r\n";
 
 int create_socket() {
   struct addrinfo *info;
@@ -90,26 +105,31 @@ int create_socket() {
   return sfd;
 }
 
-typedef enum {
-  GET,
-  HEAD,
-  OPTIONS,
-  TRACE,
-  PUT,
-  DELETE,
-  POST,
-  PATCH,
-  CONNECT
-} method;
+char *method_to_string(method mthd) {
+  switch (mthd) {
+  case GET:
+    return "GET";
+  case HEAD:
+    return "HEAD";
+  case OPTIONS:
+    return "OPTIONS";
+  case TRACE:
+    return "TRACE";
+  case PUT:
+    return "PUT";
+  case DELETE:
+    return "DELETE";
+  case POST:
+    return "POST";
+  case PATCH:
+    return "PATCH";
+  case CONNECT:
+    return "CONNECT";
+  }
+  return "Unknown";
+}
 
-typedef struct {
-  char *target;
-  method mthd;
-  uint8_t size;
-  char **headers;
-} request;
-
-int parse_headers(char *bytes, int size, request *req) {
+int parse_request(char *bytes, int size, request *req) {
   if (size < 7) {
     return -1;
   }
@@ -163,59 +183,54 @@ int parse_headers(char *bytes, int size, request *req) {
     return -1;
   }
   bytes_idx += 10;
-  while (bytes_idx < size) {
-    bytes_idx++;
-  }
-  return 0;
+  printf("Method %s, Target Resource: %s\n", method_to_string(req->mthd),
+         req->target);
+  return parse_headers(bytes + bytes_idx, size - bytes_idx, req);
 }
 
 int web_server(int cfd) {
-  char buffer[4096];
-  int bytes_received = recv(cfd, buffer, 4096, 0);
+  char request_buffer[4096];
+  int bytes_received = recv(cfd, request_buffer, 4096, 0);
   if (bytes_received < 1) {
     printf("Connection closed by client (or an error occurred)\n");
     close(cfd);
-    return 1;
+    return 0;
   }
-  if (bytes_received >= 4 && strncmp(buffer, "quit", 4) == 0) {
+  if (bytes_received >= 4 && strncmp(request_buffer, "quit", 4) == 0) {
     printf("Received shut down signal, shutting down server...\n");
     close(cfd);
     return 1;
   }
-  if (bytes_received == 4096 && strncmp(buffer + 4092, "\r\n\r\n", 4)) {
-    int response_len = strlen(response413);
-    int bytes_sent = send(cfd, response413, response_len, 0);
-    printf("Sent %d of %d bytes of error\n", bytes_sent, response_len);
+  if (bytes_received == 4096 &&
+      strncmp(request_buffer + 4092, "\r\n\r\n", 4) != 0) {
+    int response_len = strlen(too_large_response);
+    int bytes_sent = send(cfd, too_large_response, response_len, 0);
     close(cfd);
     return 0;
   }
   request req;
-  int result = parse_headers(buffer, bytes_received, &req);
+  int result = parse_request(request_buffer, bytes_received, &req);
   if (result == -1) {
-    printf("An error occurred parsing headers...\n");
-  } else {
-    printf("Method: %d\nTarget: %s\n", req.mthd, req.target);
+    int response_len = strlen(bad_request_response);
+    send(cfd, bad_request_response, response_len, 0);
+    close(cfd);
+    return 0;
   }
-  int headers_len = strlen(headers);
-  int bytes_sent = send(cfd, headers, headers_len, 0);
-  printf("Sent %d of %d bytes of headers\n", bytes_sent, headers_len);
   FILE *index_file = fopen("index.html", "rb");
   if (index_file == NULL) {
-    int response_len = strlen(response404);
-    bytes_sent = send(cfd, response404, response_len, 0);
-    printf("Sent %d of %d bytes of error\n", bytes_sent, response_len);
+    int response_len = strlen(not_found_response);
+    int bytes_sent = send(cfd, not_found_response, response_len, 0);
   } else {
     struct stat fp_stat;
     int file_fd = fileno(index_file);
     fstat(file_fd, &fp_stat);
     int file_size = fp_stat.st_size;
-    int total_bytes =
-        sprintf(buffer, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
-                file_size);
+    char buffer[128];
+    int total_bytes = sprintf(buffer, "%s\r\nContent-length: %d\r\n\r\n",
+                              constant_headers, file_size);
     int result = send(cfd, buffer, total_bytes, 0);
     result = sendfile(cfd, file_fd, 0, file_size);
     fclose(index_file);
-    printf("Sent message\n");
   }
   close(cfd);
   return 0;
